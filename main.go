@@ -2,19 +2,19 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
 
-	"encoding/json"
+	"github.com/coinbase/cdpcurl/internal/auth"
 	"github.com/coinbase/cdpcurl/transport"
 	"github.com/spf13/cobra"
 )
 
 var (
-	version = "v0.0.1"
+	version = "v0.0.6"
 )
 
 var versionCmd = &cobra.Command{
@@ -29,13 +29,30 @@ var versionCmd = &cobra.Command{
 
 func main() {
 	var data, method, apiKeyPath, header string
+	var versionFlag bool
+	var id, secret string
+
 	cmd := &cobra.Command{
 		Use:  "cdpcurl [flags] [URL]",
-		Args: cobra.MinimumNArgs(1), // Ensure at least one argument is provided
+		Args: cobra.MinimumNArgs(0), // Allow zero arguments to handle -v
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if versionFlag {
+				fmt.Println(version)
+				return nil
+			}
+
+			if len(args) == 0 {
+				return fmt.Errorf("URL is required unless using -v")
+			}
+
 			opts := []transport.Option{}
 			if apiKeyPath != "" {
 				opts = append(opts, transport.WithAPIKeyLoaderOption(transport.WithPath(apiKeyPath)))
+			}
+
+			// Add options for id and secret if they are provided
+			if id != "" && secret != "" {
+				opts = append(opts, transport.WithAPIKeyLoaderOption(auth.WithDirectIDAndSecret(id, secret)))
 			}
 
 			authTransport, err := transport.New("", http.DefaultTransport, opts...)
@@ -69,12 +86,16 @@ func main() {
 			if err != nil {
 				return err
 			}
+			defer resp.Body.Close()
 
+			// Read response body
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return err
 			}
 
+			// Print HTTP status code and response body
+			fmt.Println(resp.Status)
 			fmt.Println(string(body))
 			return nil
 		},
@@ -84,15 +105,9 @@ func main() {
 	cmd.Flags().StringVarP(&apiKeyPath, "api-key-path", "k", "", "API Key Path")
 	cmd.Flags().StringVarP(&method, "method", "X", "GET", "HTTP Method")
 	cmd.Flags().StringVarP(&header, "header", "H", "", "HTTP Header")
-	cmd.PersistentFlags().BoolP("version", "v", false, "Print the version number and exit")
-
-	cmd.PreRun = func(cmd *cobra.Command, args []string) {
-		versionFlag, _ := cmd.Flags().GetBool("version")
-		if versionFlag {
-			fmt.Println(version)
-			os.Exit(0)
-		}
-	}
+	cmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "Print the version number and exit")
+	cmd.Flags().StringVarP(&id, "id", "i", "", "API Key ID (only works with Ed25519 keys)")
+	cmd.Flags().StringVarP(&secret, "secret", "s", "", "API Key Secret (only works with Ed25519 keys)")
 
 	cmd.AddCommand(versionCmd)
 

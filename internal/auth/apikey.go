@@ -8,16 +8,50 @@ import (
 )
 
 type APIKey struct {
-	Name       string `json:"name"`
-	PrivateKey string `json:"privateKey"`
+	Name       string
+	PrivateKey string
+}
+
+// UnmarshalJSON allows APIKey to support both the old and new JSON field names.
+func (a *APIKey) UnmarshalJSON(data []byte) error {
+	// Define a temporary structure with both possible field names.
+	var aux struct {
+		Name       string `json:"name"`
+		ID         string `json:"id"`
+		PrivateKey string `json:"privateKey"`
+		Secret     string `json:"secret"`
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Use the old or new field for the API key name.
+	if aux.Name != "" {
+		a.Name = aux.Name
+	} else {
+		a.Name = aux.ID
+	}
+
+	// Use the old or new field for the API key secret.
+	if aux.PrivateKey != "" {
+		a.PrivateKey = aux.PrivateKey
+	} else {
+		a.PrivateKey = aux.Secret
+	}
+
+	return nil
 }
 
 type apiKeyLoaderConfig struct {
-	filename string
-	path     string
-	envvars  map[string]string
-	envOnly  bool
-	fileOnly bool
+	filename        string
+	path            string
+	envvars         map[string]string
+	envOnly         bool
+	fileOnly        bool
+	directID        string
+	directSecret    string
+	useDirectValues bool
 }
 
 const (
@@ -63,6 +97,14 @@ func WithFileOnly() LoadAPIKeyOption {
 	}
 }
 
+func WithDirectIDAndSecret(id, secret string) LoadAPIKeyOption {
+	return func(c *apiKeyLoaderConfig) {
+		c.directID = id
+		c.directSecret = secret
+		c.useDirectValues = true
+	}
+}
+
 func LoadAPIKey(options ...LoadAPIKeyOption) (*APIKey, error) {
 	c := &apiKeyLoaderConfig{
 		filename: defaultFilename,
@@ -97,10 +139,10 @@ func LoadAPIKey(options ...LoadAPIKeyOption) (*APIKey, error) {
 func (c *apiKeyLoaderConfig) loadApiKeyFromFile(a *APIKey) error {
 	if c.path != "" {
 		f, err := os.Open(c.path)
-		defer f.Close()
 		if err != nil {
 			return fmt.Errorf("file load: %w", err)
 		}
+		defer f.Close()
 
 		dec := json.NewDecoder(f)
 		if err := dec.Decode(a); err != nil {
@@ -116,16 +158,16 @@ func (c *apiKeyLoaderConfig) loadApiKeyFromFile(a *APIKey) error {
 	}
 	for wd != "" && wd != "/" {
 		keyFilepath := path.Join(wd, c.filename)
-		wd = path.Dir(wd)
 		f, err := os.Open(keyFilepath)
 		if err != nil {
-			// skip if file not accessable
+			// Skip if file not accessible.
+			wd = path.Dir(wd)
 			continue
 		}
+		defer f.Close()
 
 		dec := json.NewDecoder(f)
-		err = dec.Decode(a)
-		if err != nil {
+		if err := dec.Decode(a); err != nil {
 			return fmt.Errorf("file load: %w", err)
 		}
 
@@ -136,6 +178,16 @@ func (c *apiKeyLoaderConfig) loadApiKeyFromFile(a *APIKey) error {
 }
 
 func (c *apiKeyLoaderConfig) loadApiKeyFromEnv(a *APIKey) {
+	if c.useDirectValues {
+		if a.Name == "" {
+			a.Name = c.directID
+		}
+		if a.PrivateKey == "" {
+			a.PrivateKey = c.directSecret
+		}
+		return
+	}
+
 	if a.Name == "" {
 		a.Name = os.Getenv(c.envvars[nameEnvVar])
 	}
